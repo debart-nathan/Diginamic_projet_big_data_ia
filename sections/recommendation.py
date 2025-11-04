@@ -26,16 +26,18 @@ def show():
 
     st.markdown("**2. Charge-Based Outreach**")
     st.markdown("""
-    Clients with **TotalCharges between 1,500 and 6,000** show elevated churn risk.
+    Clients who have spent between **2,600 and 5,400** tend to be at higher risk of leaving, especially early in their contract.
 
     **Action Plan:**
-    - **Early tenure identification**: Flag clients in this range during onboarding
-    - **Check-ins**: Schedule outreach at Month 1 and Month 3
-    - **Onboarding frequency adjustments**:
-        - **< 1,500**: Standard onboarding
-        - **1,500–6,000**: Increased outreach
-        - **> 6,000**: Reinforce expectations and value
+    - **Spot early signs**: Flag new clients in this spending range during their first few months
+    - **Reach out early**: Check in around Month 1 and Month 3 to offer support and reinforce value
+    - **Tailor onboarding**:
+        - **Under 300**: Standard onboarding (low risk)
+        - **300–2,600**: Light follow-up
+        - **2,600–5,400**: Extra attention 
+        - **Over 5,400**: Reinforce expectations and satisfaction 
     """)
+
 
 
     st.markdown("**3. Event-Based Promotions**")

@@ -664,9 +664,11 @@ def show(df_merged):
             feature_names_transformed
         )
 
+
     def define_total_charge_bins_by_shap(features_df, shap_values, feature_names_transformed, n_bins=4, min_bin_width=50):
         if "TotalCharges" not in feature_names_transformed:
             raise ValueError("TotalCharges not found in transformed features.")
+        
         idx = feature_names_transformed.index("TotalCharges")
         shap_total_charge = shap_values.values[:, idx]
 
@@ -675,27 +677,37 @@ def show(df_merged):
         filtered_df = features_df[valid_mask].copy()
         filtered_shap = shap_total_charge[valid_mask]
 
-        # Prepare 2D clustering input: [TotalCharges, SHAP]
+        # Prepare 2D clustering input: [TotalCharges, SHAP] and standardize
         X = np.column_stack([
             filtered_df["TotalCharges"].values,
             filtered_shap
         ])
+        X_scaled = StandardScaler().fit_transform(X)
 
         # Run KMeans clustering
         kmeans = KMeans(n_clusters=n_bins, random_state=42)
-        cluster_labels = kmeans.fit_predict(X)
+        cluster_labels = kmeans.fit_predict(X_scaled)
 
-        # Assign cluster labels
+        # Assign cluster labels and SHAP values
         filtered_df["SHAP_Cluster"] = cluster_labels
         filtered_df["SHAP_Value"] = filtered_shap
 
-        # Get min/max TotalCharges per cluster
-        cluster_ranges = filtered_df.groupby("SHAP_Cluster")["TotalCharges"].agg(["min", "max"]).sort_values("min")
+        # Compute SHAP-weighted TotalCharges for binning
+        filtered_df["SHAP_Weighted_Charge"] = filtered_df["TotalCharges"] * np.abs(filtered_df["SHAP_Value"])
+
+        # Get min/max TotalCharges per cluster, sorted by SHAP-weighted mean
+        cluster_stats = (
+            filtered_df.groupby("SHAP_Cluster")
+            .agg(min_charge=("TotalCharges", "min"),
+                max_charge=("TotalCharges", "max"),
+                mean_weighted=("SHAP_Weighted_Charge", "mean"))
+            .sort_values("mean_weighted")
+        )
 
         # Build bin edges from cluster boundaries
-        bin_edges = [cluster_ranges.iloc[0]["min"]]
-        for i in range(len(cluster_ranges)):
-            edge = cluster_ranges.iloc[i]["max"]
+        bin_edges = [cluster_stats.iloc[0]["min_charge"]]
+        for i in range(len(cluster_stats)):
+            edge = cluster_stats.iloc[i]["max_charge"]
             if edge - bin_edges[-1] >= min_bin_width:
                 bin_edges.append(edge)
 
@@ -839,19 +851,20 @@ def show(df_merged):
 
 
     st.success("""
-    Clients are most likely to churn within the first 24 months of tenure, indicating a critical window for retention efforts.
+        Clients are most likely to churn within the first 24 months of tenure, indicating a critical window for retention efforts.
 
-    For the general population, SHAP analysis shows that both **very low and very high MonthlyCharges** tend to have a strong negative impact on churn prediction. This suggests that some clients may be more sensitive to pricing extremes, with high-paying clients occasionally showing elevated churn risk.
+        For the general population, SHAP analysis shows that both **very low and very high MonthlyCharges** tend to have a strong negative impact on churn prediction. This suggests that some clients may be more sensitive to pricing extremes, with high-paying clients occasionally showing elevated churn risk.
 
-    Regarding **TotalCharges**, the overall SHAP impact is relatively neutral across most of the population, except for very low values which tend to reduce churn risk.
+        Regarding **TotalCharges**, the overall SHAP impact is relatively neutral across most of the population, except for very low values which tend to reduce churn risk.
 
-    However, when isolating clients with **tenure under 24 months**, a more nuanced pattern emerges:
-    - Clients with **very low TotalCharges (8–1,519)** show low churn rates (18.9%) and minimal SHAP impact, indicating stable retention.
-    - The **1,519–3,497** range shows the highest churn rate (41.5%) and strongest positive SHAP attribution, marking it as a critical risk tier.
-    - The **3,497–6,079** group has moderate churn (30%) with similarly elevated SHAP values.
-    - Surprisingly, clients in the **highest billing tier (6,079–11,153)** show the highest churn rate (50%) but slightly negative SHAP attribution, suggesting other stabilizing factors may be at play.
+        However, when isolating clients with **tenure under 24 months**, a more nuanced pattern emerges:
+        - Clients with **very low TotalCharges (3–303)** show low churn rates (21.2%) and slightly negative SHAP attribution, indicating stable retention.
+        - The **303–2,646** range shows elevated churn (32.6%) and a shift to positive SHAP values, marking the start of churn-sensitive behavior.
+        - The **2,646–5,445** group continues this trend with higher churn (35.1%) and sustained positive SHAP attribution.
+        - Clients in the **highest billing tier (5,445–11,153)** show the highest churn rate (44.7%) despite SHAP values plateauing, suggesting that TotalCharges may stop influencing the model past a certain threshold, with other features likely driving churn prediction.
 
-    """)
+        """)
+
 
 
 
