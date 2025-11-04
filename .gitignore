@@ -1,0 +1,40 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter notebooks checkpoints (if any)
+.ipynb_checkpoints/
+
+# Virtual environment folders
+venv/
+env/
+.venv/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDE/editor configs
+.vscode/
+.idea/
+
+# Streamlit config and logs
+.streamlit/config.toml
+.streamlit/secrets.toml
+.streamlit/*.log
+
+# Environment and dependency artifacts
+*.env
+*.log
+*.bak
+
+# Package management
+pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
+
+# Temporary files
+*.tmp
