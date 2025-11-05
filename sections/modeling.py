@@ -626,7 +626,7 @@ def show(df_merged):
             feature_column,
             shap_column,
             c=original_target, # Color by Churn value
-            cmap='cividis',
+            cmap='bwr',
             alpha=0.4,
             s=10
         )
@@ -678,7 +678,7 @@ def show(df_merged):
             filtered_df["TotalCharges"],
             filtered_df["SHAP_TotalCharges"],
             c=filtered_df["Churn"],
-            cmap="cividis",
+            cmap="bwr",
             alpha=0.5,
             s=20
         )

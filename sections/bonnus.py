@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +9,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import PCA
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -24,19 +26,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 
 
-def find_elbow_point(x, y):
-    x_norm = (x - np.min(x)) / (np.max(x) - np.min(x))
-    y_norm = (y - np.min(y)) / (np.max(y) - np.min(y))
-
-    line_vec = np.array([x_norm[-1] - x_norm[0], y_norm[-1] - y_norm[0]])
-    line_vec /= np.linalg.norm(line_vec)
-
-    vecs = np.stack([x_norm - x_norm[0], y_norm - y_norm[0]], axis=1)
-    proj = np.dot(vecs, line_vec)
-    proj_point = np.outer(proj, line_vec) + np.array([x_norm[0], y_norm[0]])
-    dist = np.linalg.norm(vecs - proj_point, axis=1)
-
-    return x[np.argmax(dist)]
 
 class AutoencoderWrapper(BaseEstimator, TransformerMixin):
     def __init__(self, pipeline, fit_on_normal_only=True):
@@ -112,6 +101,18 @@ class AutoencoderWrapper(BaseEstimator, TransformerMixin):
         reconstructions = self.autoencoder.predict(X_scaled)
         mse = np.mean(np.square(X_scaled - reconstructions), axis=1)
         return mse
+    
+    def get_pca_projection(self, X, n_components=2):
+        """
+        Returns PCA projection of the transformed input data.
+        """
+        X_scaled = self.pipeline.transform(X)
+        if hasattr(X_scaled, "toarray"):
+            X_scaled = X_scaled.toarray()
+
+        pca = PCA(n_components=n_components)
+        X_pca = pca.fit_transform(X_scaled)
+        return X_pca
 
 
 def show(df_merged):
@@ -119,18 +120,8 @@ def show(df_merged):
 
     st.markdown("""
     ### Define Your Business Priorities  
-    Use the sliders below to guide the model based on what matters most:
-    - **Customer Coverage**: What percentage of likely churners should we identify?
-    - **Alert Accuracy**: What percentage of alerts should be correct?
+    Use the sliders below to guide the model.
     """)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        min_recall_pct = st.slider("Minimum Customer Coverage (%)", 0, 100, 10, step=5)
-        min_recall = min_recall_pct / 100.0
-    with col2:
-        min_precision_pct = st.slider("Minimum Alert Accuracy (%)", 0, 100, 10, step=5)
-        min_precision = min_precision_pct / 100.0
 
     @st.cache_resource
     def train_autoencoder(X_train,y_train, _pipeline):
@@ -183,80 +174,36 @@ def show(df_merged):
     y_train_numeric = y_train.map({'No': 0, 'Yes': 1})
     # Train and cache the wrapped model
     wrapped_model = train_autoencoder(X_train,y_train_numeric, full_pipeline)
-
-    # Predict reconstruction error on new data
+    # Compute reconstruction error
     mse = wrapped_model.transform(X_test)
-
     y_true = (y_test == "Yes").astype(int)
 
-    thresholds = np.linspace(min(mse), max(mse), 100)
-    precision, recall = [], []
+    # Define slider range
+    min_thresh = float(np.min(mse))
+    max_thresh = float(np.max(mse))
+    default_thresh = float(np.percentile(mse, 95))
 
-    for t in thresholds:
-        preds = (mse > t).astype(int)
-        p, r, _, _ = precision_recall_fscore_support(y_true, preds, average='binary', zero_division=0)
-        precision.append(p)
-        recall.append(r)
+    # Add interactive slider
+    chosen_threshold = st.slider(
+        "Select Reconstruction Error Threshold",
+        min_value=min_thresh,
+        max_value=max_thresh,
+        value=default_thresh,
+        step=(max_thresh - min_thresh) / 100
+    )
 
-
-    elbow_threshold = find_elbow_point(thresholds, recall)
-
-    valid_indices = [
-        i for i, (p, r) in enumerate(zip(precision, recall))
-        if p >= min_precision and r >= min_recall
-    ]
-    if valid_indices:
-        chosen_idx = min(valid_indices, key=lambda i: abs(thresholds[i] - elbow_threshold))
-        chosen_threshold = thresholds[chosen_idx]
-    else:
-        st.warning("No threshold meets both minimum coverage and accuracy.")
-
-        # Use a default threshold (e.g., 95th percentile of reconstruction loss)
-        default_threshold = np.percentile(mse, 95)
-        y_pred_custom = (mse > default_threshold).astype(int)
-
-        # Generate classification report
-        report_dict = classification_report(
-            y_true,
-            y_pred_custom,
-            target_names=["No", "Yes"],
-            zero_division=0,
-            output_dict=True
-        )
-        report_df = pd.DataFrame(report_dict).transpose()
-
-        with st.expander("Default Model Performance (Threshold = 95th Percentile)"):
-            st.dataframe(report_df.style.format("{:.2f}"))
-
-        # Optionally show confusion matrix
-        cm = confusion_matrix(y_true, y_pred_custom)
-        cm_df = pd.DataFrame(cm, index=["No", "Yes"], columns=["No", "Yes"])
-        with st.expander("Confusion Matrix"):
-            fig, ax = plt.subplots()
-            sns.heatmap(cm_df, annot=True, fmt="d", cmap="Blues", ax=ax)
-            ax.set_xlabel("Predicted Labels")
-            ax.set_ylabel("True Labels")
-            ax.set_title("Confusion Matrix (Default Threshold)")
-            st.pyplot(fig)
-
-        return
-
-
-
+    # Predict anomalies
     y_pred_custom = (mse > chosen_threshold).astype(int)
 
-    total_churners = sum(y_true)
-    predicted_churners = sum(y_pred_custom)
-    true_positives = sum((y_pred_custom == 1) & (y_true == 1))
+    # Compute metrics
+    true_positives = np.sum((y_pred_custom == 1) & (y_true == 1))
+    total_churners = np.sum(y_true)
+    predicted_churners = np.sum(y_pred_custom)
 
-    try:
-        threshold_idx = np.where(np.isclose(thresholds, chosen_threshold))[0][0]
-    except IndexError:
-        threshold_idx = np.argmin(np.abs(thresholds - chosen_threshold))
+    precision_val = true_positives / predicted_churners if predicted_churners > 0 else 0
+    recall_val = true_positives / total_churners if total_churners > 0 else 0
 
-    recall_val = recall[threshold_idx]
-    precision_val = precision[threshold_idx]
-
+    # Display metrics
     st.subheader("Model Performance Based on Your Priorities")
     st.write(f"**Threshold used:** `{chosen_threshold:.5f}`")
     st.metric("Churners Detected", f"{true_positives} of {total_churners}")
@@ -264,13 +211,13 @@ def show(df_merged):
     st.metric("Coverage (Recall)", f"{recall_val * 100:.1f}%")
     st.metric("Accuracy (Precision)", f"{precision_val * 100:.1f}%")
 
-
     st.success(f"""
     **Model Summary Based on Your Priorities**  
-    - Churner detection rate: **{recall[np.argmax(thresholds == chosen_threshold)]*100:.1f}%**  
-    - Alert precision: **{precision[np.argmax(thresholds == chosen_threshold)]*100:.1f}%**  
+    - Churner detection rate: **{recall_val * 100:.1f}%**  
+    - Alert precision: **{precision_val * 100:.1f}%**
     """)
 
+    # Classification report
     report_dict = classification_report(
         y_true,
         y_pred_custom,
@@ -283,6 +230,7 @@ def show(df_merged):
     with st.expander("Detailed Classification Report"):
         st.dataframe(report_df.style.format("{:.2f}"))
 
+    # Confusion matrix
     cm = confusion_matrix(y_true, y_pred_custom)
     cm_df = pd.DataFrame(cm, index=["No", "Yes"], columns=["No", "Yes"])
 
@@ -294,25 +242,57 @@ def show(df_merged):
         ax.set_title("Confusion Matrix")
         st.pyplot(fig)
 
-    st.markdown("### Detection Tradeoff Curve")
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(recall, precision, label="Precision-Recall Curve", color="blue")
-    ax.axvline(x=recall[np.argmax(thresholds == chosen_threshold)], color="red", linestyle="--", label=f"Coverage @ {recall[np.argmax(thresholds == chosen_threshold)]:.2f}")
-    ax.axhline(y=precision[np.argmax(thresholds == chosen_threshold)], color="green", linestyle="--", label=f"Accuracy @ {precision[np.argmax(thresholds == chosen_threshold)]:.2f}")
-    ax.set_xlabel("Coverage (Recall)")
-    ax.set_ylabel("Accuracy (Precision)")
-    ax.set_title("Detection Tradeoff for Churners")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
+    # Loss vs. Recall Curve
+    thresholds = np.linspace(min_thresh, max_thresh, 100)
+    recall_curve = [
+        np.sum((mse > t) & (y_true == 1)) / total_churners if total_churners > 0 else 0
+        for t in thresholds
+    ]
 
     st.markdown("### Loss vs. Recall Curve")
     fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(thresholds, recall, color="purple", label="Recall")
+    ax.plot(thresholds, recall_curve, color="purple", label="Recall")
     ax.axvline(x=chosen_threshold, color="red", linestyle="--", label=f"Threshold @ {chosen_threshold:.5f}")
     ax.set_xlabel("Reconstruction Loss Threshold")
     ax.set_ylabel("Recall")
     ax.set_title("Loss vs. Recall Curve")
     ax.legend()
+    ax.grid(True)
+    st.pyplot(fig)
+
+    # PCA visualization
+    X_test_pca = wrapped_model.get_pca_projection(X_test)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    scatter = ax.scatter(
+        X_test_pca[:, 0],
+        X_test_pca[:, 1],
+        c=y_pred_custom,
+        cmap='bwr',
+        alpha=0.5,
+        s=10
+    )
+    ax.set_title("Résultat de la détection d'anomalies (Autoencoder + PCA)")
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.grid(True)
+    st.pyplot(fig)
+
+    # PCA projection
+    X_test_pca = wrapped_model.get_pca_projection(X_test)
+
+    # Visualization using true labels
+    fig, ax = plt.subplots(figsize=(10, 6))
+    scatter = ax.scatter(
+        X_test_pca[:, 0],
+        X_test_pca[:, 1],
+        c=y_true,
+        cmap='bwr',
+        alpha=0.5,
+        s=10
+    )
+    ax.set_title("Répartition réelle des churners (Autoencoder + PCA)")
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
     ax.grid(True)
     st.pyplot(fig)
