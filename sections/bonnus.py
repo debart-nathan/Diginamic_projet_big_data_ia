@@ -20,6 +20,10 @@ from tensorflow.keras import layers
 from utils.imputation import CustomImputer, TextCleaner
 from utils.classify_columns import classify_columns
 
+from sklearn.base import BaseEstimator, TransformerMixin
+
+
+
 def find_elbow_point(x, y):
     x_norm = (x - np.min(x)) / (np.max(x) - np.min(x))
     y_norm = (y - np.min(y)) / (np.max(y) - np.min(y))
@@ -34,29 +38,14 @@ def find_elbow_point(x, y):
 
     return x[np.argmax(dist)]
 
-def show(df_merged):
-    st.header("Customer Churn Detection : Autoencoder Model")
+class AutoencoderWrapper(BaseEstimator, TransformerMixin):
+    def __init__(self, pipeline, fit_on_normal_only=True):
+        self.pipeline = pipeline
+        self.autoencoder = None
+        self.fit_on_normal_only = fit_on_normal_only
 
-    st.markdown("""
-    ### Define Your Business Priorities  
-    Use the sliders below to guide the model based on what matters most:
-    - **Customer Coverage**: What percentage of likely churners should we identify?
-    - **Alert Accuracy**: What percentage of alerts should be correct?
-    """)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        min_recall_pct = st.slider("Minimum Customer Coverage (%)", 0, 100, 10, step=5)
-        min_recall = min_recall_pct / 100.0
-    with col2:
-        min_precision_pct = st.slider("Minimum Alert Accuracy (%)", 0, 100, 10, step=5)
-        min_precision = min_precision_pct / 100.0
-
-    @st.cache_resource
-    def train_autoencoder(_X_train_scaled):
-        input_dim = _X_train_scaled.shape[1]
+    def build_autoencoder(self, input_dim):
         encoding_dim = int(input_dim * 0.25)
-
         input_layer = keras.Input(shape=(input_dim,))
 
         # Encoder
@@ -78,6 +67,26 @@ def show(df_merged):
 
         autoencoder = keras.Model(inputs=input_layer, outputs=decoded)
         autoencoder.compile(optimizer='adam', loss='mse')
+        return autoencoder
+
+    def fit(self, X, y=None):
+        # Always fit the pipeline on the full data
+        X_scaled_full = self.pipeline.fit_transform(X)
+        if hasattr(X_scaled_full, "toarray"):
+            X_scaled_full = X_scaled_full.toarray()
+
+        # Filter normal data if requested
+        if self.fit_on_normal_only and y is not None:
+            y = pd.Series(y, index=X.index)
+            normal_mask = y == 0
+            if normal_mask.sum() == 0:
+                raise ValueError("No normal samples found for training the autoencoder.")
+            X_scaled = X_scaled_full[normal_mask.values]
+        else:
+            X_scaled = X_scaled_full
+
+        input_dim = X_scaled.shape[1]
+        self.autoencoder = self.build_autoencoder(input_dim)
 
         early_stop = keras.callbacks.EarlyStopping(
             monitor='loss',
@@ -85,32 +94,52 @@ def show(df_merged):
             restore_best_weights=True
         )
 
-        autoencoder.fit(
-            _X_train_scaled,
-            _X_train_scaled,
+        self.autoencoder.fit(
+            X_scaled,
+            X_scaled,
             epochs=50,
             batch_size=32,
             shuffle=True,
             verbose=0,
             callbacks=[early_stop]
         )
+        return self
 
-        return autoencoder
+    def transform(self, X):
+        X_scaled = self.pipeline.transform(X)
+        if hasattr(X_scaled, "toarray"):
+            X_scaled = X_scaled.toarray()
+        reconstructions = self.autoencoder.predict(X_scaled)
+        mse = np.mean(np.square(X_scaled - reconstructions), axis=1)
+        return mse
 
 
-    df_aggregated = df_merged.groupby("customerID", as_index=False, observed=False).agg({
-        col: "median" if df_merged[col].dtype.kind in "iufc" else "first"
-        for col in df_merged.columns
-    })
+def show(df_merged):
+    st.header("Customer Churn Detection : Autoencoder Model")
+
+    st.markdown("""
+    ### Define Your Business Priorities  
+    Use the sliders below to guide the model based on what matters most:
+    - **Customer Coverage**: What percentage of likely churners should we identify?
+    - **Alert Accuracy**: What percentage of alerts should be correct?
+    """)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        min_recall_pct = st.slider("Minimum Customer Coverage (%)", 0, 100, 10, step=5)
+        min_recall = min_recall_pct / 100.0
+    with col2:
+        min_precision_pct = st.slider("Minimum Alert Accuracy (%)", 0, 100, 10, step=5)
+        min_precision = min_precision_pct / 100.0
+
+    @st.cache_resource
+    def train_autoencoder(X_train,y_train, _pipeline):
+        model = AutoencoderWrapper(pipeline=_pipeline)
+        model.fit(X_train,y_train)
+        return model
+
 
     target = "Churn"
-    X = df_aggregated.drop(target, axis=1)
-    y = df_aggregated[target]
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
-
-
-
     numeric_cols, categorical_cols, text_cols = classify_columns(df_merged, target)
 
 
@@ -147,16 +176,17 @@ def show(df_merged):
         ("preprocess", preprocessor)
     ])
 
-    X_train_nonchurn = X_train[y_train == "No"]
-    X_train_scaled = full_pipeline.fit_transform(X_train_nonchurn)
-    X_test_scaled = full_pipeline.transform(X_test)
-    if hasattr(X_train_scaled, "toarray"):
-        X_train_scaled = X_train_scaled.toarray()
-    if hasattr(X_test_scaled, "toarray"):
-        X_test_scaled = X_test_scaled.toarray()
-    autoencoder = train_autoencoder(X_train_scaled)
-    reconstructions = autoencoder.predict(X_test_scaled)
-    mse = np.mean(np.square(X_test_scaled - reconstructions), axis=1)
+    X = df_merged.drop(target, axis=1)
+    y = df_merged[target]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
+    y_train_numeric = y_train.map({'No': 0, 'Yes': 1})
+    # Train and cache the wrapped model
+    wrapped_model = train_autoencoder(X_train,y_train_numeric, full_pipeline)
+
+    # Predict reconstruction error on new data
+    mse = wrapped_model.transform(X_test)
+
     y_true = (y_test == "Yes").astype(int)
 
     thresholds = np.linspace(min(mse), max(mse), 100)

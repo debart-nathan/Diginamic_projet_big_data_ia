@@ -234,13 +234,9 @@ def show(df_merged):
         min_precision_pct = st.slider("Minimum Alert Accuracy (%)", 0, 100, 10, step=5)
         min_precision = min_precision_pct / 100.0
 
-    df_aggregated = df_merged.groupby("customerID", as_index=False, observed=False).agg({
-        col: "median" if df_merged[col].dtype.kind in "iufc" else "first"
-        for col in df_merged.columns
-    })
 
-    X = df_aggregated.drop("Churn", axis=1)
-    y = df_aggregated["Churn"]
+    X = df_merged.drop("Churn", axis=1)
+    y = df_merged["Churn"]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
@@ -630,7 +626,7 @@ def show(df_merged):
             feature_column,
             shap_column,
             c=original_target, # Color by Churn value
-            cmap='bwr',
+            cmap='cividis',
             alpha=0.4,
             s=10
         )
