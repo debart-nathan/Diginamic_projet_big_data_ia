@@ -7,11 +7,17 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
+from sklearn.feature_extraction.text import TfidfVectorizer
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tensorflow import keras
+from tensorflow.keras import regularizers
 from tensorflow.keras import layers
 
+
+
+from utils.imputation import CustomImputer, TextCleaner
 from utils.classify_columns import classify_columns
 
 def find_elbow_point(x, y):
@@ -47,25 +53,32 @@ def show(df_merged):
         min_precision = min_precision_pct / 100.0
 
     @st.cache_resource
-    def train_autoencoder(X_train_scaled):
-        input_dim = X_train_scaled.shape[1]
-        encoding_dim = int(input_dim * 0.5)
+    def train_autoencoder(_X_train_scaled):
+        input_dim = _X_train_scaled.shape[1]
+        encoding_dim = int(input_dim * 0.25)
 
         input_layer = keras.Input(shape=(input_dim,))
 
-        # Encoder:
-        x = layers.Dense(input_dim, activation='relu')(input_layer)
-        x = layers.Dense(int((input_dim + encoding_dim) / 2), activation='relu')(x)
-        encoded = layers.Dense(encoding_dim, activation='relu')(x)
+        # Encoder
+        x = layers.Dense(input_dim, activation='relu', kernel_regularizer=regularizers.l2(1e-4))(input_layer)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(int(input_dim * 0.75), activation='relu', kernel_regularizer=regularizers.l2(1e-4))(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(int(input_dim * 0.5), activation='relu', kernel_regularizer=regularizers.l2(1e-4))(x)
+        x = layers.Dropout(0.2)(x)
+        encoded = layers.Dense(encoding_dim, activation='relu', kernel_regularizer=regularizers.l2(1e-4))(x)
 
-        # Decoder: symmetric to encoder
-        x = layers.Dense(int((input_dim + encoding_dim) / 2), activation='relu')(encoded)
-        x = layers.Dense(input_dim, activation='relu')(x)
+        # Decoder
+        x = layers.Dense(int(input_dim * 0.5), activation='relu', kernel_regularizer=regularizers.l2(1e-4))(encoded)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(int(input_dim * 0.75), activation='relu', kernel_regularizer=regularizers.l2(1e-4))(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(input_dim, activation='relu', kernel_regularizer=regularizers.l2(1e-4))(x)
         decoded = layers.Dense(input_dim, activation='sigmoid')(x)
-
 
         autoencoder = keras.Model(inputs=input_layer, outputs=decoded)
         autoencoder.compile(optimizer='adam', loss='mse')
+
         early_stop = keras.callbacks.EarlyStopping(
             monitor='loss',
             patience=5,
@@ -73,15 +86,17 @@ def show(df_merged):
         )
 
         autoencoder.fit(
-            X_train_scaled,
-            X_train_scaled,
+            _X_train_scaled,
+            _X_train_scaled,
             epochs=50,
             batch_size=32,
             shuffle=True,
             verbose=0,
             callbacks=[early_stop]
         )
+
         return autoencoder
+
 
     df_aggregated = df_merged.groupby("customerID", as_index=False, observed=False).agg({
         col: "median" if df_merged[col].dtype.kind in "iufc" else "first"
@@ -98,26 +113,48 @@ def show(df_merged):
 
     numeric_cols, categorical_cols, text_cols = classify_columns(df_merged, target)
 
+
     numeric_transformer = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler())
     ])
+
     categorical_transformer = Pipeline([
         ("imputer", SimpleImputer(strategy="constant", fill_value="__MISSING__")),
         ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
     ])
 
-    preprocessor = ColumnTransformer([
-        ("num", numeric_transformer, numeric_cols),
-        ("cat", categorical_transformer, categorical_cols)
+    text_transformer = Pipeline([
+        ("cleaner", TextCleaner()),
+        ("tfidf", TfidfVectorizer(
+            stop_words='english',
+            token_pattern=r'\b[a-zA-Z]{2,}\b'
+        ))
+    ])
+
+    # Only one text column allowed for TfidfVectorizer
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_cols),
+            ("cat", categorical_transformer, categorical_cols),
+            ("text", text_transformer, text_cols[0])
+        ],
+        sparse_threshold=0  # Force dense output
+    )
+
+    full_pipeline = Pipeline([
+        ("custom_imputer", CustomImputer()),
+        ("preprocess", preprocessor)
     ])
 
     X_train_nonchurn = X_train[y_train == "No"]
-    X_train_scaled = preprocessor.fit_transform(X_train_nonchurn)
-    X_test_scaled = preprocessor.transform(X_test)
-
+    X_train_scaled = full_pipeline.fit_transform(X_train_nonchurn)
+    X_test_scaled = full_pipeline.transform(X_test)
+    if hasattr(X_train_scaled, "toarray"):
+        X_train_scaled = X_train_scaled.toarray()
+    if hasattr(X_test_scaled, "toarray"):
+        X_test_scaled = X_test_scaled.toarray()
     autoencoder = train_autoencoder(X_train_scaled)
-
     reconstructions = autoencoder.predict(X_test_scaled)
     mse = np.mean(np.square(X_test_scaled - reconstructions), axis=1)
     y_true = (y_test == "Yes").astype(int)
