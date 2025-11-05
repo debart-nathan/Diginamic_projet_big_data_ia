@@ -6,7 +6,8 @@ from sections import (
     data_analysis,
     missing_data_strategy,
     modeling,
-    recommendation
+    recommendation,
+    bonnus
 )
 
 # Sidebar navigation options
@@ -16,7 +17,8 @@ sections = [
     "Data analysis",
     "Missing Data Strategy",
     "Modeling & interpretability",
-    "Recommendation"
+    "Recommendation",
+    "Bonnus"
 ]
 
 # Read query parameter
@@ -56,3 +58,5 @@ elif section ==  "Modeling & interpretability":
     modeling.show(df_merged)
 elif section == "Recommendation":
     recommendation.show()
+elif section == "Bonnus":
+    bonnus.show(df_merged)
