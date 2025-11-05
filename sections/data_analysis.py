@@ -281,12 +281,26 @@ This helps identify potential differences between the two groups.
 
     # Display categorical comparisons
     for col in categorical_cols:
-        with st.expander(f"{col} by Churn"):
+        with st.expander(f"{col} by Churn (Counts)"):
             fig, ax = plt.subplots(figsize=(8, 4))
             sns.countplot(data=df_merged, x=col, hue=target, palette='pastel', ax=ax)
-            ax.set_title(f'{col} distribution by {target}')
+            ax.set_title(f'{col} distribution by {target} (Counts)')
             ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
             st.pyplot(fig)
+
+        with st.expander(f"{col} by Churn (Normalized)"):
+            # Create normalized proportions safely
+            grouped = df_merged.groupby([col, target]).size()
+            normalized = grouped / grouped.groupby(level=0).sum()
+            prop_df = normalized.reset_index().rename(columns={0: 'proportion'})
+
+            fig, ax = plt.subplots(figsize=(8, 4))
+            sns.barplot(data=prop_df, x=col, y='proportion', hue=target, palette='pastel', ax=ax)
+            ax.set_title(f'{col} distribution by {target} (Normalized)')
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
+            st.pyplot(fig)
+
+
 
 
     st.success(
