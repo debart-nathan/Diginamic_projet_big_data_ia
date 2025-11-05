@@ -201,13 +201,6 @@ def show(df_merged):
 
     elbow_threshold = find_elbow_point(thresholds, recall)
 
-    # Filter thresholds that meet user-defined minimums
-    valid_indices = [i for i, (p, r) in enumerate(zip(precision, recall)) if p >= min_precision and r >= min_recall]
-
-   
-    elbow_threshold = find_elbow_point(thresholds, recall)
-
-
     valid_indices = [
         i for i, (p, r) in enumerate(zip(precision, recall))
         if p >= min_precision and r >= min_recall
