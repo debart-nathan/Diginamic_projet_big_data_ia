@@ -722,7 +722,7 @@ def show(df_merged):
             "SHAP_TotalCharges": filtered_shap
         })
 
-        grouped = summary_df.groupby("TotalChargeBin").agg(
+        grouped = summary_df.groupby("TotalChargeBin", observed=True).agg(
             count=("Churn", "size"),
             churn_rate=("Churn", "mean"),
             median_shap=("SHAP_TotalCharges", "median")
