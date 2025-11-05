@@ -26,20 +26,18 @@ def show():
 
     st.markdown("**2. Charge-Based Outreach**")
     st.markdown("""
-    Clients who have spent over **2,600** early in their contract tend to be at higher risk of leaving.
+    Clients with **TotalCharges above 320** during early tenure show significantly higher churn risk.
 
     **Action Plan:**
-    - **Spot early signs**: Flag new clients in this spending range during their first few months  
-    - **Reach out early**: Check in around Month 1 and Month 3 to offer support and reinforce value  
+    - **Spot early signs**: Flag new clients who cross the 320 threshold within their first few months  
+    - **Reach out early**: Engage around Month 1 and Month 3 to reinforce value and clarify expectations  
     - **Tailor onboarding**:
-        - **Under 300**: Standard onboarding (low risk)  
-        - **300–2,600**: Light follow-up  
-        - **2,600–5,400**: Extra attention  
-        - **Over 5,400**: Reinforce expectations and satisfaction  
+        - **≤320**: Standard onboarding (low risk)  
+        - **>320**: Prioritized follow-up and satisfaction checks  
 
     **Plan-Fit Counseling:**
-    - Offer a **voluntary plan review** for high spenders (e.g., those that are provisioned to arrive into the high spending bracket before the end of 24 months)  
-    - Ensure clients understand what their plan includes and whether a **lower-cost alternative** could meet their needs  
+    - Offer a **voluntary plan review** for clients trending toward high spending  
+    - Ensure transparency around plan features and explore **lower-cost alternatives** if appropriate  
     - Frame as a **trust-building service**, not a downgrade push  
     - Document all recommendations and ensure **no pressure or bias** in guidance  
     - Track impact on satisfaction and retention
@@ -49,6 +47,7 @@ def show():
     - No demographic or behavioral profiling  
     - Messaging must be neutral, informative, and opt-in
     """)
+
 
     st.markdown("**3. Event-Based Promotions**")
     st.markdown("""

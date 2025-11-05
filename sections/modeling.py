@@ -528,17 +528,24 @@ def show(df_merged):
         st.stop()
 
     row_index_sample = matching_row.index[0]
-
+    proba_selected = y_proba[sample_indices[row_index_sample]]
+    label_selected = y_pred_custom[sample_indices[row_index_sample]]
     st.subheader(f"Prediction Explanation for Client: {selected_client_id}")
-    st.markdown("""
-    This chart explains **why this specific client is predicted to churn**.  
+    if label_selected == 1:
+        churn_text = f"is predicted to **churn** with a probability of {proba_selected:.2%} (threshold: {chosen_threshold:.2f})"
+        action_text = "what actions might help retain similar clients"
+    else:
+        churn_text = f"is predicted to **stay** with a probability of {(1 - proba_selected):.2%} (threshold: {chosen_threshold:.2f})"
+        action_text = "what factors contribute to client retention"
+
+    st.markdown(f"""
+    This chart explains **why this specific client {churn_text}**.  
     Each bar shows how much a factor influenced the prediction:
     - **Red bars** push the prediction toward churn.
     - **Blue bars** pull it away from churn.
 
-    This helps you understand the key reasons behind the prediction — and what actions might help retain similar clients.
+    This helps you understand the key reasons behind the prediction and {action_text}.
     """)
-
     try:
         fig, ax = plt.subplots()
         shap.plots.waterfall(shap_values_positive_class[row_index_sample], show=False)
@@ -640,8 +647,9 @@ def show(df_merged):
             feature_column,
             shap_column,
             c=original_target, # Color by Churn value
-            cmap='coolwarm',
+            cmap='plasma',
             alpha=0.4,
+            s=10,
             edgecolors='k'
         )
 
@@ -665,116 +673,47 @@ def show(df_merged):
         )
 
 
-    def define_total_charge_bins_by_shap(features_df, shap_values, feature_names_transformed, n_bins=4, min_bin_width=50):
-        if "TotalCharges" not in feature_names_transformed:
-            raise ValueError("TotalCharges not found in transformed features.")
-        
-        idx = feature_names_transformed.index("TotalCharges")
-        shap_total_charge = shap_values.values[:, idx]
+    st.markdown("""
+    The following charts examine how churn is distributed across **TotalCharges** bins for clients with tenure under 24 months.
 
-        # Drop rows with NaN in TotalCharges or SHAP
-        valid_mask = ~features_df["TotalCharges"].isna() & ~pd.isna(shap_total_charge)
-        filtered_df = features_df[valid_mask].copy()
-        filtered_shap = shap_total_charge[valid_mask]
+    This complements the SHAP analysis by showing whether churners in this early stage are concentrated in specific billing ranges.  
+    It helps assess whether **mid-range or high TotalCharges** are disproportionately associated with churn among newer clients.
+    """)
 
-        # Prepare 2D clustering input: [TotalCharges, SHAP] and standardize
-        X = np.column_stack([
-            filtered_df["TotalCharges"].values,
-            filtered_shap
-        ])
-        X_scaled = StandardScaler().fit_transform(X)
-
-        # Run KMeans clustering
-        kmeans = KMeans(n_clusters=n_bins, random_state=42)
-        cluster_labels = kmeans.fit_predict(X_scaled)
-
-        # Assign cluster labels and SHAP values
-        filtered_df["SHAP_Cluster"] = cluster_labels
-        filtered_df["SHAP_Value"] = filtered_shap
-
-        # Compute SHAP-weighted TotalCharges for binning
-        filtered_df["SHAP_Weighted_Charge"] = filtered_df["TotalCharges"] * np.abs(filtered_df["SHAP_Value"])
-
-        # Get min/max TotalCharges per cluster, sorted by SHAP-weighted mean
-        cluster_stats = (
-            filtered_df.groupby("SHAP_Cluster")
-            .agg(min_charge=("TotalCharges", "min"),
-                max_charge=("TotalCharges", "max"),
-                mean_weighted=("SHAP_Weighted_Charge", "mean"))
-            .sort_values("mean_weighted")
-        )
-
-        # Build bin edges from cluster boundaries
-        bin_edges = [cluster_stats.iloc[0]["min_charge"]]
-        for i in range(len(cluster_stats)):
-            edge = cluster_stats.iloc[i]["max_charge"]
-            if edge - bin_edges[-1] >= min_bin_width:
-                bin_edges.append(edge)
-
-        # Ensure full coverage
-        max_charge = features_df["TotalCharges"].max()
-        if bin_edges[-1] < max_charge:
-            bin_edges.append(max_charge)
-
-        # Deduplicate and sort
-        bin_edges = sorted(set(bin_edges))
-        return bin_edges
-        
-
-    def strip_plot_shap_by_total_charge_with_bins(features_df, target_series, shap_values, feature_names_transformed, bin_edges, tenure_threshold=24):
+    def scatter_plot_shap_vs_total_charge(features_df, target_series, shap_values, feature_names_transformed, tenure_threshold=24):
         if "TotalCharges" not in feature_names_transformed:
             st.warning("TotalCharges not found in transformed features.")
             return
+
         idx = feature_names_transformed.index("TotalCharges")
         shap_total_charge = shap_values.values[:, idx]
 
-        # Filter by tenure
-        mask = features_df["tenure"] < tenure_threshold
-        filtered_features = features_df[mask].copy()
-        filtered_target = target_series[mask]
-        filtered_shap = shap_total_charge[mask]
-
-        # Bin TotalCharges
-        bin_labels = [f"{int(bin_edges[i]):,}–{int(bin_edges[i+1]):,}" for i in range(len(bin_edges)-1)]
-        bin_categories = pd.CategoricalDtype(categories=bin_labels, ordered=True)
-        filtered_features["TotalChargeBin"] = pd.cut(
-            filtered_features["TotalCharges"],
-            bins=bin_edges,
-            labels=bin_labels,
-            include_lowest=True
-        ).astype(bin_categories)
-
-        # Build DataFrame
-        plot_df = pd.DataFrame({
-            "TotalChargeBin": filtered_features["TotalChargeBin"],
-            "SHAP_TotalCharges": filtered_shap,
-            "Churn": filtered_target
-        })
+        # Filter by tenure and drop NaNs
+        mask = (features_df["tenure"] < tenure_threshold) & ~features_df["TotalCharges"].isna() & ~pd.isna(shap_total_charge)
+        filtered_df = features_df[mask].copy()
+        filtered_df["SHAP_TotalCharges"] = shap_total_charge[mask]
+        filtered_df["Churn"] = target_series[mask]
 
         # Plot
         fig, ax = plt.subplots()
-        for i, bin_label in enumerate(bin_labels):
-            bin_data = plot_df[plot_df["TotalChargeBin"] == bin_label]
-            x_vals = np.random.normal(loc=i, scale=0.1, size=len(bin_data))  # jitter
-            ax.scatter(
-                x_vals,
-                bin_data["SHAP_TotalCharges"],
-                c=bin_data["Churn"],
-                cmap="coolwarm",
-                alpha=0.5,
-                edgecolors="k"
-            )
+        scatter = ax.scatter(
+            filtered_df["TotalCharges"],
+            filtered_df["SHAP_TotalCharges"],
+            c=filtered_df["Churn"],
+            cmap="plasma",
+            alpha=0.5,
+            s=20,
+            edgecolors="k"
+        )
 
-        ax.set_xticks(range(len(bin_labels)))
-        ax.set_xticklabels(bin_labels, rotation=45)
-        ax.set_xlabel("TotalCharges Range (SHAP-based Bins)")
+        ax.axvline(x=320, color="gray", linestyle="--", linewidth=1)
+        ax.set_xscale("log")
+        ax.set_xlabel("TotalCharges")
         ax.set_ylabel("SHAP Value (TotalCharges)")
-        ax.set_title("SHAP Attribution by TotalCharges Bin (Tenure < 24 months)")
-        cbar = fig.colorbar(ax.collections[0])
+        ax.set_title("SHAP Attribution vs TotalCharges (Tenure < 24 months)")
+        cbar = fig.colorbar(scatter)
         cbar.set_label("Churn (0 = No, 1 = Yes)")
         st.pyplot(fig)
-
-
 
 
     def summarize_churn_and_shap_by_total_charge(features_df, target_series, shap_values, feature_names_transformed, bin_edges, tenure_threshold=24):
@@ -815,41 +754,25 @@ def show(df_merged):
         st.markdown("#### Churn Rate and Median SHAP Value by TotalCharges Range (Tenure < 24 months)")
         st.dataframe(grouped.style.format({"churn_rate": "{:.1%}", "median_shap": "{:.4f}"}))
 
-
-
-    st.markdown("""
-    The following charts examine how churn is distributed across **TotalCharges** bins for clients with tenure under 24 months.
-
-    This complements the SHAP analysis by showing whether churners in this early stage are concentrated in specific billing ranges.  
-    It helps assess whether **mid-range or high TotalCharges** are disproportionately associated with churn among newer clients.
-    """)
-    custom_bin_edges = define_total_charge_bins_by_shap(
-        X_sample_original,
-        shap_values_positive_class,
-        feature_names_transformed,
-        n_bins=4
+    scatter_plot_shap_vs_total_charge(
+        features_df=X_sample_original,
+        target_series=y_sample_numeric,
+        shap_values=shap_values_positive_class,
+        feature_names_transformed=feature_names_transformed,
+        tenure_threshold=24
     )
 
-    strip_plot_shap_by_total_charge_with_bins(
-        X_sample_original,
-        y_sample_numeric,
-        shap_values_positive_class,
-        feature_names_transformed,
-        bin_edges=custom_bin_edges
-    )
+    # Define bins manually based on visual inspection
+    manual_bin_edges = [0, 320, X_sample_original["TotalCharges"].max()]
 
     summarize_churn_and_shap_by_total_charge(
-        X_sample_original,
-        y_sample_numeric,
-        shap_values_positive_class,
-        feature_names_transformed,
-        bin_edges=custom_bin_edges
+        features_df=X_sample_original,
+        target_series=y_sample_numeric,
+        shap_values=shap_values_positive_class,
+        feature_names_transformed=feature_names_transformed,
+        bin_edges=manual_bin_edges,
+        tenure_threshold=24
     )
-
-
-
-
-
     st.success("""
         Clients are most likely to churn within the first 24 months of tenure, indicating a critical window for retention efforts.
 
@@ -857,13 +780,13 @@ def show(df_merged):
 
         Regarding **TotalCharges**, the overall SHAP impact is relatively neutral across most of the population, except for very low values which tend to reduce churn risk.
 
-        However, when isolating clients with **tenure under 24 months**, a more nuanced pattern emerges:
-        - Clients with **very low TotalCharges (3–303)** show low churn rates (21.2%) and slightly negative SHAP attribution, indicating stable retention.
-        - The **303–2,646** range shows elevated churn (32.6%) and a shift to positive SHAP values, marking the start of churn-sensitive behavior.
-        - The **2,646–5,445** group continues this trend with higher churn (35.1%) and sustained positive SHAP attribution.
-        - Clients in the **highest billing tier (5,445–11,153)** show the highest churn rate (44.7%) despite SHAP values plateauing, suggesting that TotalCharges may stop influencing the model past a certain threshold, with other features likely driving churn prediction.
+        However, when isolating clients with **tenure under 24 months**, a clearer segmentation emerges:
+        - Clients with **TotalCharges below 320** show a lower churn rate (22.9%) and slightly negative SHAP attribution (–0.0027), indicating stable retention and minimal model concern.
+        - Clients with **TotalCharges above 320** exhibit a significantly higher churn rate (35.0%) and a shift to positive SHAP attribution (+0.0003), suggesting that billing accumulation becomes a meaningful churn signal in early tenure.
 
+        This pattern reinforces the importance of monitoring billing exposure during the first months of service, especially as clients cross the low-charge threshold.
         """)
+
 
 
 
@@ -1085,13 +1008,17 @@ def show(df_merged):
     st.markdown("### SHAP Feature Importance for Users Without Feedback")
 
          # Clients with no feedback data
+    total_churn_count = y_sample_numeric.sum()
     missing_text_mask = X_sample_original[text_cols[0]].isna() | (X_sample_original[text_cols[0]].str.strip() == "")
     missing_text_count = missing_text_mask.sum()
     missing_text_churn_count = y_sample_numeric[missing_text_mask].sum()
+    churn_share_among_missing = (missing_text_churn_count / total_churn_count) * 100
     st.markdown(f"**Clients with no feedback data:** {missing_text_count} ({(missing_text_count/sample_size)*100:.1f}%)")
     st.markdown(f"**Churners among them:** {missing_text_churn_count}  \n"
                 f"- {((missing_text_churn_count/missing_text_count)*100):.1f}% of users without feedback  \n"
-                f"- {((missing_text_churn_count/sample_size)*100):.1f}% of total sample")
+                f"- {((missing_text_churn_count/sample_size)*100):.1f}% of total sample  \n"
+                f"- {churn_share_among_missing:.1f}% of all churners")
+
     
 
     shap_values_non_feedback = shap_values_positive_class[missing_text_mask.values]
