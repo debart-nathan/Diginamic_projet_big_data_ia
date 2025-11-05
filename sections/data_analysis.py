@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from wordcloud import WordCloud
 from utils.treat_text import get_pos_and_neg_words
+from utils.classify_columns import classify_columns
 
 
 def show(df_merged):
@@ -46,45 +47,7 @@ Some columns, such as `InternetService`, `SatisfactionScore`, and `AvgDataUsage_
 Removing these entries would significantly reduce the dataset and risk distorting the sample. To avoid this, we’ve implemented a targeted strategy for handling missing values, detailed in the , outlined in the [Missing Data Strategy](?section=Missing%20Data%20Strategy) section. This approach preserves data integrity while minimizing bias introduced by deletion.
 """)
     
-    def classify_columns(df, target, cat_threshold=20, text_threshold=50):
-        numeric_cols = []
-        categorical_cols = []
-        text_cols = []
 
-        for col in df.columns:
-            if col in [target, "customerID"]:
-                continue
-
-            unique_vals = df[col].nunique(dropna=True)
-            dtype = df[col].dtype
-
-            if pd.api.types.is_object_dtype(df[col]):
-                max_len = df[col].dropna().astype(str).map(len).max()
-                if max_len and max_len > text_threshold:
-                    text_cols.append(col)
-                else:
-                    categorical_cols.append(col)
-
-            elif pd.api.types.is_bool_dtype(df[col]):
-                categorical_cols.append(col)
-
-            elif pd.api.types.is_datetime64_any_dtype(df[col]):
-                categorical_cols.append(col)
-
-            elif pd.api.types.is_integer_dtype(df[col]):
-                if unique_vals <= cat_threshold:
-                    categorical_cols.append(col)
-                else:
-                    numeric_cols.append(col)
-
-            elif pd.api.types.is_float_dtype(df[col]):
-                numeric_cols.append(col)
-
-            else:
-                categorical_cols.append(col)
-
-        
-        return numeric_cols, categorical_cols, text_cols
 
     target = "Churn"
     numeric_cols, categorical_cols, text_cols = classify_columns(df_merged,target)
@@ -297,7 +260,7 @@ This helps identify potential differences between the two groups.
             fig, ax = plt.subplots(figsize=(8, 4))
             sns.barplot(data=prop_df, x=col, y='proportion', hue=target, palette='pastel', ax=ax)
             ax.set_title(f'{col} distribution by {target} (Normalized)')
-            ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
+            plt.setp(ax.get_xticklabels(), rotation=45)
             st.pyplot(fig)
 
 

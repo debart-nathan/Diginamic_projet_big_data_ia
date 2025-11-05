@@ -16,7 +16,6 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.cluster import KMeans
 
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
@@ -25,6 +24,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 from utils.imputation import CustomImputer, TextCleaner
+from utils.classify_columns import classify_columns
 
 import re
     
@@ -175,26 +175,27 @@ import re
     #   print("Best Parameters Found:")
     #   print(search.best_params_)
 
-@st.cache_resource
-def train_model(X_train, y_train_encoded, _preprocessor):
-    rf_pipeline = Pipeline([
-        ("custom_imputer", CustomImputer()),
-        ("preprocess", _preprocessor),
-        ("smote", SMOTE(random_state=42)),
-        ("classifier", RandomForestClassifier(
-            n_estimators=200,
-            min_samples_split=5,
-            min_samples_leaf=1,
-            max_features="log2",
-            max_depth=10,
-            class_weight= "balanced",
-            random_state=42
-        ))
-    ])
-    rf_pipeline.fit(X_train, y_train_encoded)
-    return rf_pipeline
+
 
 def show(df_merged):
+    @st.cache_resource
+    def train_model(X_train, y_train_encoded, _preprocessor):
+        rf_pipeline = Pipeline([
+            ("custom_imputer", CustomImputer()),
+            ("preprocess", _preprocessor),
+            ("smote", SMOTE(random_state=42)),
+            ("classifier", RandomForestClassifier(
+                n_estimators=200,
+                min_samples_split=5,
+                min_samples_leaf=1,
+                max_features="log2",
+                max_depth=10,
+                class_weight= "balanced",
+                random_state=42
+            ))
+        ])
+        rf_pipeline.fit(X_train, y_train_encoded)
+        return rf_pipeline
     st.header("Customer Churn Detection : Model")
     with st.expander("How This Model Was Chosen"):
         st.markdown("""
@@ -249,44 +250,6 @@ def show(df_merged):
     y_train_encoded = le.fit_transform(y_train)
     y_test_encoded = le.transform(y_test)
 
-    def classify_columns(df, target, cat_threshold=0, text_threshold=50):
-        numeric_cols = []
-        categorical_cols = []
-        text_cols = []
-
-        for col in df.columns:
-            if col in [target, "customerID"]:
-                continue
-
-            unique_vals = df[col].nunique(dropna=True)
-
-            if pd.api.types.is_object_dtype(df[col]):
-                max_len = df[col].dropna().astype(str).map(len).max()
-                if max_len and max_len > text_threshold:
-                    text_cols.append(col)
-                else:
-                    categorical_cols.append(col)
-
-            elif pd.api.types.is_bool_dtype(df[col]):
-                categorical_cols.append(col)
-
-            elif pd.api.types.is_datetime64_any_dtype(df[col]):
-                categorical_cols.append(col)
-
-            elif pd.api.types.is_integer_dtype(df[col]):
-                if unique_vals <= cat_threshold:
-                    categorical_cols.append(col)
-                else:
-                    numeric_cols.append(col)
-
-            elif pd.api.types.is_float_dtype(df[col]):
-                numeric_cols.append(col)
-
-            else:
-                categorical_cols.append(col)
-
-        return numeric_cols, categorical_cols, text_cols
-
 
 
     target = "Churn"
@@ -330,16 +293,36 @@ def show(df_merged):
 
     if not valid_indices:
         st.warning("No threshold meets both minimum coverage and accuracy.")
-        default_pred = (y_proba >= 0.5).astype(int)
-        with st.expander("Default Model Performance (Threshold = 0.50)"):
-            st.text(classification_report(
-                y_test_encoded,
-                default_pred,
-                target_names=le.classes_,
-                zero_division=0
-            ))
-        return
 
+        # Use a default threshold (e.g., 95th percentile of reconstruction loss)
+        default_threshold = np.percentile(mse, 95)
+        y_pred_custom = (mse > default_threshold).astype(int)
+
+        # Generate classification report
+        report_dict = classification_report(
+            y_true,
+            y_pred_custom,
+            target_names=["No", "Yes"],
+            zero_division=0,
+            output_dict=True
+        )
+        report_df = pd.DataFrame(report_dict).transpose()
+
+        with st.expander("Default Model Performance (Threshold = 95th Percentile)"):
+            st.dataframe(report_df.style.format("{:.2f}"))
+
+        # Optionally show confusion matrix
+        cm = confusion_matrix(y_true, y_pred_custom)
+        cm_df = pd.DataFrame(cm, index=["No", "Yes"], columns=["No", "Yes"])
+        with st.expander("Confusion Matrix"):
+            fig, ax = plt.subplots()
+            sns.heatmap(cm_df, annot=True, fmt="d", cmap="Blues", ax=ax)
+            ax.set_xlabel("Predicted Labels")
+            ax.set_ylabel("True Labels")
+            ax.set_title("Confusion Matrix (Default Threshold)")
+            st.pyplot(fig)
+
+        return
     f1_scores = [2 * (precision[i] * recall[i]) / (precision[i] + recall[i]) for i in valid_indices]
     best_idx = valid_indices[np.argmax(f1_scores)]
     chosen_threshold = thresholds[best_idx]
@@ -647,10 +630,9 @@ def show(df_merged):
             feature_column,
             shap_column,
             c=original_target, # Color by Churn value
-            cmap='plasma',
+            cmap='bwr',
             alpha=0.4,
-            s=10,
-            edgecolors='k'
+            s=10
         )
 
 
@@ -700,10 +682,9 @@ def show(df_merged):
             filtered_df["TotalCharges"],
             filtered_df["SHAP_TotalCharges"],
             c=filtered_df["Churn"],
-            cmap="plasma",
+            cmap="cividis",
             alpha=0.5,
-            s=20,
-            edgecolors="k"
+            s=20
         )
 
         ax.axvline(x=320, color="gray", linestyle="--", linewidth=1)
